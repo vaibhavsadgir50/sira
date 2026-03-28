@@ -24,6 +24,7 @@
 
 **Guides**
 
+- [Install from Git (pip / npm)](install-packages.md)
 - [Authentication](authentication.md)
 - [Configuration](configuration.md)
 - [Security Model](security.md)

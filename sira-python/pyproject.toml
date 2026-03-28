@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "sira-python"
 version = "0.1.0"
 description = "SIRA Python server implementation"
-readme = "README.md"
+readme = { text = "SIRA Python server (Starlette + WebSockets). See https://github.com/vaibhavsadgir50/sira and docs/ in the repository.", content-type = "text/plain" }
 license = { text = "MIT" }
 requires-python = ">=3.11"
 keywords = ["sira", "websocket", "protocol", "encryption", "state"]
