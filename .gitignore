@@ -1,5 +1,7 @@
 # Per project policy: do not version markdown
 *.md
+# Exception: Node/Python vector tests read this from repo root
+!/TEST_VECTORS.md
 
 # Per project policy: search demo app not in remote
 /sira-search/
