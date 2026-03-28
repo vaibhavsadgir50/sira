@@ -2,6 +2,9 @@
 *.md
 # Exception: Node/Python vector tests read this from repo root
 !/TEST_VECTORS.md
+# Exception: documentation
+!/docs/
+!docs/**
 
 # Per project policy: search demo app not in remote
 /sira-search/
