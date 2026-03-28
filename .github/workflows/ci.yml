@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: SIRA CI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo build --all-features
+      - run: cargo test --all-features
+      - run: cargo clippy --all-features -- -D warnings
+      - run: cargo fmt --check
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: sira-python tests
+        run: |
+          pip install -e "./sira-python[dev]"
+          python -m pytest sira-python/tests/
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: sira-node tests
+        working-directory: sira-node
+        run: |
+          npm ci
+          npm test
+      - name: Build sira-cli
+        run: cd sira-cli && cargo build
+      - name: Integration tests
+        run: |
+          pip install -e "./sira-python[dev]" httpx websockets pytest pytest-asyncio
+          bash integration/run_all.sh
+      - name: sira-cli smoke (Rust echo server)
+        run: |
+          export SIRA_MASTER_SECRET="$(openssl rand -hex 32)"
+          ./target/debug/sira &
+          SIRA_PID=$!
+          sleep 2
+          cd sira-cli
+          cargo run --quiet -- ping --host localhost:3000
+          cargo run --quiet -- send --host localhost:3000 '{"type":"test"}'
+          kill $SIRA_PID

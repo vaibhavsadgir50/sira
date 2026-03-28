@@ -1,0 +1,26 @@
+# Per project policy: do not version markdown
+*.md
+
+# Per project policy: search demo app not in remote
+/sira-search/
+
+# Rust
+target/
+**/*.rs.bk
+
+# Node
+node_modules/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/

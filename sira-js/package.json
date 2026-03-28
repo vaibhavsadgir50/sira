@@ -1,0 +1,23 @@
+{
+  "name": "sira-js",
+  "version": "0.1.0",
+  "description": "SIRA browser client",
+  "main": "sira.js",
+  "type": "module",
+  "exports": {
+    ".": "./sira.js"
+  },
+  "keywords": ["sira", "websocket", "protocol", "encryption", "state"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vaibhavsadgir50/sira"
+  },
+  "dependencies": {
+    "@msgpack/msgpack": "^3.0.0",
+    "tweetnacl": "^1.0.3"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

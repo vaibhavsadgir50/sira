@@ -1,0 +1,29 @@
+{
+  "name": "sira-node",
+  "version": "0.1.0",
+  "description": "SIRA Node.js server implementation",
+  "type": "module",
+  "main": "src/index.js",
+  "license": "MIT",
+  "keywords": ["sira", "websocket", "protocol", "encryption", "state"],
+  "dependencies": {
+    "@noble/curves": "^1.3.0",
+    "@noble/hashes": "^1.3.3",
+    "@msgpack/msgpack": "^3.0.0",
+    "ws": "^8.16.0"
+  },
+  "devDependencies": {
+    "vitest": "^1.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "example": "node example/echo.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vaibhavsadgir50/sira"
+  }
+}

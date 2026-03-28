@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SIRA — Basic Demo</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: monospace; background: #0d0d0d; color: #e0e0e0; padding: 24px; }
+  h1 { color: #4a9eff; margin-bottom: 8px; font-size: 20px; }
+  .subtitle { color: #666; font-size: 13px; margin-bottom: 32px; }
+  .windows { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .window { border: 1px solid #222; border-radius: 6px; overflow: hidden; }
+  .window-header { background: #1a1a2e; padding: 10px 16px; font-size: 12px; color: #4a9eff; display: flex; justify-content: space-between; }
+  .window-body { padding: 16px; min-height: 200px; }
+  .render { background: #111; border-radius: 4px; padding: 12px; font-size: 12px; color: #aaa; white-space: pre-wrap; word-break: break-all; }
+  .controls { margin-top: 12px; display: flex; gap: 8px; }
+  input { background: #1a1a1a; border: 1px solid #333; color: #e0e0e0; padding: 8px 12px; border-radius: 4px; font-family: monospace; font-size: 13px; flex: 1; }
+  button { background: #1a3c5e; color: #4a9eff; border: 1px solid #2e6da4; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-family: monospace; font-size: 13px; }
+  button:hover { background: #2e6da4; color: #fff; }
+  .status { font-size: 11px; padding: 4px 8px; border-radius: 3px; }
+  .status.connected { background: #0d2a0d; color: #4caf50; }
+  .status.disconnected { background: #2a0d0d; color: #f44336; }
+  .log { margin-top: 32px; }
+  .log h3 { color: #666; font-size: 12px; margin-bottom: 8px; }
+  .log-entries { background: #0a0a0a; border: 1px solid #1a1a1a; border-radius: 4px; padding: 12px; height: 150px; overflow-y: auto; font-size: 11px; }
+  .log-entry { padding: 2px 0; border-bottom: 1px solid #111; color: #555; }
+  .log-entry.up { color: #4a9eff; }
+  .log-entry.down { color: #4caf50; }
+  .log-entry.err { color: #f44336; }
+  .devtools-note { margin-top: 24px; background: #111; border: 1px solid #222; border-radius: 4px; padding: 16px; font-size: 12px; color: #555; }
+  .devtools-note strong { color: #4a9eff; }
+</style>
+</head>
+<body>
+
+<h1>SIRA</h1>
+<p class="subtitle">Open DevTools → Network → WS → click /w → see nothing readable</p>
+
+<div class="windows">
+  <div class="window" id="win1">
+    <div class="window-header">
+      <span>Window 1</span>
+      <span class="status disconnected" id="status1">disconnected</span>
+    </div>
+    <div class="window-body">
+      <div class="render" id="render1">not connected</div>
+      <div class="controls">
+        <input id="input1" placeholder="type anything..." value="hello from window 1">
+        <button onclick="sendAction(1)">CLsend</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="window" id="win2">
+    <div class="window-header">
+      <span>Window 2</span>
+      <span class="status disconnected" id="status2">disconnected</span>
+    </div>
+    <div class="window-body">
+      <div class="render" id="render2">not connected</div>
+      <div class="controls">
+        <input id="input2" placeholder="type anything..." value="hello from window 2">
+        <button onclick="sendAction(2)">CLsend</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="log">
+  <h3>WIRE LOG — what DevTools actually sees</h3>
+  <div class="log-entries" id="logEntries"></div>
+</div>
+
+<div class="devtools-note">
+  <strong>DevTools Network tab shows:</strong><br><br>
+  /h &nbsp;&nbsp; HTTPS POST &nbsp;&nbsp; one time handshake &nbsp;&nbsp; closed<br>
+  /w &nbsp;&nbsp; WS 101 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; upgrading &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; open forever<br><br>
+  Click any WS message frame → <strong>Binary data not shown</strong><br>
+  No field names. No action types. No structure. Nothing readable. Ever.
+</div>
+
+<script type="module">
+// Inline SIRA client (simplified for demo — no build step needed)
+// Production: import from sira-js package
+
+import nacl from 'https://cdn.jsdelivr.net/npm/tweetnacl@1.0.3/nacl.min.js'
+import { encode, decode } from 'https://cdn.jsdelivr.net/npm/@msgpack/msgpack@3.0.0/dist/index.mjs'
+
+const MESSAGE_SIZE = 1024
+const IV_SIZE = 12
+const ID_SIZE = 16
+const PAYLOAD_SIZE = MESSAGE_SIZE - IV_SIZE - 16
+const DATA_SIZE = PAYLOAD_SIZE - ID_SIZE
+const MAX_CHUNK_DATA = DATA_SIZE - 64
+const CHUNK_SAFE = 900
+const MAX_ASSEMBLED_PAYLOAD = 8 * 1024 * 1024
+const MAX_CHUNK_COUNT = 16384
+const HEARTBEAT_MS = 30_000
+const HKDF_INFO = new TextEncoder().encode('sst-aes-gcm-v1')
+
+function toU8(d) {
+    if (d instanceof Uint8Array) return d
+    if (ArrayBuffer.isView(d)) return new Uint8Array(d.buffer, d.byteOffset, d.byteLength)
+    return new Uint8Array(d)
+}
+
+class ChunkRx {
+    constructor() { this.map = new Map() }
+    push(idHex, ch) {
+        const d = toU8(ch.d)
+        if (ch.k !== 'ch' || ch.n === 0 || ch.n > MAX_CHUNK_COUNT || ch.i >= ch.n || d.byteLength > MAX_CHUNK_DATA) throw new Error('chunk')
+        let slot = this.map.get(idHex)
+        const now = Date.now()
+        if (!slot || now - slot.t0 > 120000) {
+            slot = { n: ch.n, parts: new Array(ch.n).fill(null), filled: 0, bytes: 0, t0: now }
+            this.map.set(idHex, slot)
+        }
+        if (slot.n !== ch.n || slot.parts[ch.i]) throw new Error('chunk')
+        slot.parts[ch.i] = d; slot.filled++; slot.bytes += d.byteLength
+        if (slot.bytes > MAX_ASSEMBLED_PAYLOAD) { this.map.delete(idHex); throw new Error('chunk') }
+        if (slot.filled < ch.n) return null
+        const out = new Uint8Array(slot.bytes)
+        let o = 0
+        for (const p of slot.parts) { out.set(p, o); o += p.byteLength }
+        this.map.delete(idHex)
+        return out
+    }
+}
+
+class Sira {
+    constructor() {
+        this.key = null
+        this.ws = null
+        this.windowId = 'w_' + toHex(crypto.getRandomValues(new Uint8Array(8)))
+        this.stateHash = null
+        this.substate = null
+        this.pending = new Map()
+        this.onrender = null
+        this._beatTimer = null
+        this._connected = false
+        this._rx = new ChunkRx()
+    }
+
+    async open(opts = {}) {
+        this.persistent = opts.persistent ?? false
+        this.key = await this._handshake()
+        await this._connect()
+        this._connected = true
+        this._startHeartbeat()
+    }
+
+    async send(action) {
+        const id = crypto.getRandomValues(new Uint8Array(ID_SIZE))
+        const idHex = toHex(id)
+        const hash = this.stateHash || await initialHash(this.windowId)
+        const clsend = { h: hash, a: action, w: this.windowId }
+        if (this.substate) clsend.s = this.substate
+        const payload = encode(clsend)
+
+        return new Promise((resolve, reject) => {
+            this.pending.set(idHex, { resolve, reject })
+            this._sendChunks(payload, id).catch(e => { this.pending.delete(idHex); reject(e) })
+        })
+    }
+
+    async _sendChunks(payload, id) {
+        if (payload.byteLength <= DATA_SIZE) {
+            log('up', `CLsend → 1024 B encrypted`)
+            this.ws.send(await this._encrypt(payload, id))
+            return
+        }
+        const n = Math.ceil(payload.byteLength / CHUNK_SAFE)
+        if (n > MAX_CHUNK_COUNT) throw new Error('payload too large')
+        for (let i = 0; i < n; i++) {
+            const d = payload.subarray(i * CHUNK_SAFE, Math.min((i + 1) * CHUNK_SAFE, payload.byteLength))
+            log('up', `CLsend chunk ${i + 1}/${n} → 1024 B`)
+            this.ws.send(await this._encrypt(encode({ k: 'ch', i, n, d }), id))
+        }
+    }
+
+    async _handshake() {
+        const kp = nacl.box.keyPair()
+        const qs = this.persistent ? '?persistent=true' : ''
+        const res = await fetch('/h' + qs, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/octet-stream' },
+            body: kp.publicKey,
+            credentials: 'include'
+        })
+        const serverPub = new Uint8Array(await res.arrayBuffer())
+        const shared = nacl.scalarMult(kp.secretKey, serverPub)
+        log('down', `Handshake complete — session born`)
+        const base = await crypto.subtle.importKey('raw', shared, 'HKDF', false, ['deriveKey'])
+        return crypto.subtle.deriveKey(
+            { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: HKDF_INFO },
+            base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt'])
+    }
+
+    async _connect() {
+        const proto = location.protocol === 'https:' ? 'wss' : 'ws'
+        return new Promise(resolve => {
+            this.ws = new WebSocket(`${proto}://${location.host}/w`)
+            this.ws.binaryType = 'arraybuffer'
+            this.ws.onopen = () => { log('down', `WebSocket open — 101 Upgrading`); resolve() }
+            this.ws.onmessage = async e => await this._handle(new Uint8Array(e.data))
+        })
+    }
+
+    _startHeartbeat() {
+        const tick = async () => {
+            if (!this._connected || !this.ws) return
+            try {
+                const beat = encode({ beat: true, w: this.windowId })
+                const id = crypto.getRandomValues(new Uint8Array(ID_SIZE))
+                this.ws.send(await this._encrypt(beat, id))
+            } catch (_) {}
+            if (this._connected && this.ws) this._beatTimer = setTimeout(tick, HEARTBEAT_MS)
+        }
+        this._beatTimer = setTimeout(tick, HEARTBEAT_MS)
+    }
+
+    async _handle(raw) {
+        if (raw.length !== MESSAGE_SIZE) return
+        try {
+            const { requestId, payload } = await this._decrypt(raw)
+            const idHex = toHex(requestId)
+            log('down', `SVsend ← 1024 B encrypted`)
+
+            try {
+                const b = decode(payload)
+                if (b && b.beat) return
+            } catch (_) {}
+
+            let full = null
+            try {
+                const o = decode(payload)
+                if (o && o.k === 'ch') {
+                    try { full = this._rx.push(idHex, o) } catch (_) { return }
+                    if (full === null) return
+                }
+            } catch (_) {}
+            if (full === null) full = payload
+
+            const msg = decode(full)
+            this.stateHash = msg.h
+            if (msg.s) this.substate = msg.s
+
+            const p = this.pending.get(idHex)
+            if (p) { p.resolve(msg.r); this.pending.delete(idHex) }
+            else if (this.onrender) this.onrender(msg.r, msg.w)
+        } catch(e) { log('err', `Error: ${e.message}`) }
+    }
+
+    async _encrypt(payload, id) {
+        const pt = new Uint8Array(PAYLOAD_SIZE)
+        pt.set(id, 0)
+        pt.set(payload.byteLength > DATA_SIZE ? payload.subarray(0, DATA_SIZE) : payload, ID_SIZE)
+        const iv = crypto.getRandomValues(new Uint8Array(IV_SIZE))
+        const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, this.key, pt)
+        const msg = new Uint8Array(MESSAGE_SIZE)
+        msg.set(iv, 0)
+        msg.set(new Uint8Array(ct), IV_SIZE)
+        return msg
+    }
+
+    async _decrypt(raw) {
+        const iv = raw.slice(0, IV_SIZE)
+        const ct = raw.slice(IV_SIZE)
+        const pt = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, this.key, ct))
+        const requestId = pt.slice(0, ID_SIZE)
+        let end = pt.length
+        while (end > ID_SIZE && pt[end-1] === 0) end--
+        return { requestId, payload: pt.slice(ID_SIZE, end) }
+    }
+}
+
+function toHex(b) { return Array.from(b).map(x => x.toString(16).padStart(2,'0')).join('') }
+
+async function initialHash(wid) {
+    const data = new TextEncoder().encode('sst-initial-' + wid)
+    const h = await crypto.subtle.digest('SHA-256', data)
+    return toHex(new Uint8Array(h))
+}
+
+function log(dir, msg) {
+    const el = document.getElementById('logEntries')
+    const entry = document.createElement('div')
+    entry.className = `log-entry ${dir}`
+    entry.textContent = `${new Date().toLocaleTimeString()} ${dir === 'up' ? '↑' : dir === 'down' ? '↓' : '!'} ${msg}`
+    el.appendChild(entry)
+    el.scrollTop = el.scrollHeight
+}
+
+// ── Init both windows ──────────────────────────────────────────────────────
+
+const instances = {}
+
+async function initWindow(n) {
+    const sira = new Sira()
+    sira.onrender = (render) => {
+        document.getElementById(`render${n}`).textContent = JSON.stringify(render, null, 2)
+    }
+    await sira.open()
+    instances[n] = sira
+    document.getElementById(`status${n}`).className = 'status connected'
+    document.getElementById(`status${n}`).textContent = 'connected'
+}
+
+window.sendAction = async (n) => {
+    const input = document.getElementById(`input${n}`).value
+    const render = await instances[n].send(input)
+    document.getElementById(`render${n}`).textContent = JSON.stringify(render, null, 2)
+}
+
+// Open both windows
+await initWindow(1)
+await initWindow(2)
+</script>
+</body>
+</html>
